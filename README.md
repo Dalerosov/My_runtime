@@ -30,3 +30,5 @@ Built to understand JIT and runtime internals from the ground up — instruction
 ## Building
 
 The code can be browsed and built, but there's currently no working demo to run — this section will be filled in once there's an end-to-end path from IL to execution.
+
+As of now you can at least get a hexdump, the program exaecutes from `D:\mylang.test.sil`; you can just change the target in code though
