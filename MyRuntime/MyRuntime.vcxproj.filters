@@ -1,0 +1,90 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Source Files\temp">
+      <UniqueIdentifier>{11d40832-815d-4855-bf0a-34a54c3de3d0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\core">
+      <UniqueIdentifier>{c2dad962-ba64-4b05-9eee-0524c75928a1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\jit">
+      <UniqueIdentifier>{4392c75c-4ac7-4222-b56e-268ca3ba7d6e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\runtime">
+      <UniqueIdentifier>{e25a8763-e158-4e1b-ab9d-27a3149305cc}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="MyRuntime.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="il.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="emitter.cpp">
+      <Filter>Source Files\jit</Filter>
+    </ClCompile>
+    <ClCompile Include="compiler.cpp">
+      <Filter>Source Files\jit</Filter>
+    </ClCompile>
+    <ClCompile Include="memory.cpp">
+      <Filter>Source Files\runtime</Filter>
+    </ClCompile>
+    <ClCompile Include="runtime.cpp">
+      <Filter>Source Files\runtime</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="ILDoc.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="TempInput.h">
+      <Filter>Source Files\temp</Filter>
+    </ClInclude>
+    <ClInclude Include="il.hpp">
+      <Filter>Source Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="value.hpp">
+      <Filter>Source Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="emitter.hpp">
+      <Filter>Source Files\jit</Filter>
+    </ClInclude>
+    <ClInclude Include="compiler.hpp">
+      <Filter>Source Files\jit</Filter>
+    </ClInclude>
+    <ClInclude Include="types.hpp">
+      <Filter>Source Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.hpp">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="runtime.hpp">
+      <Filter>Source Files\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="registers.hpp">
+      <Filter>Source Files\jit</Filter>
+    </ClInclude>
+    <ClInclude Include="loader.hpp">
+      <Filter>Source Files\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="parser2.hpp">
+      <Filter>Source Files\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="tmp.hpp">
+      <Filter>Source Files\temp</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
