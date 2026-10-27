@@ -44,7 +44,7 @@ public:
                 auto [name, ret, params] = parse_fn_decl(line);
                 cur_fn = program.add_function(name, ret, params);
                 cur_block = program.find_by_id(cur_fn)->entry();
-                for(auto param : params) {
+                for(auto& param : params) {
                     param.reg = get_or_alloc_reg(param.name, param.type, program.find_by_id(cur_fn), reg_map).id;
                 }
                 label_map["entry"] = 0;
@@ -207,17 +207,17 @@ private:
 
         // binary literal e.g. 1010b
         if (s.back() == 'b' && s.find_first_not_of("01", 0) == s.size() - 1) {
-            i64 val = std::stoll(s.substr(0, s.size() - 1), nullptr, 2);
+            u64 val = std::stoll(s.substr(0, s.size() - 1), nullptr, 2);
             return Operand::from_int(val);
         }
 
         // hex literal e.g. Ax or 0xFF
         if (s.back() == 'x' && s.size() > 1 && s[0] != '0') {
-            i64 val = std::stoll(s.substr(0, s.size() - 1), nullptr, 16);
+            u64 val = std::stoll(s.substr(0, s.size() - 1), nullptr, 16);
             return Operand::from_int(val);
         }
         if (s.size() > 2 && s[0] == '0' && s[1] == 'x') {
-            i64 val = std::stoll(s, nullptr, 16);
+            u64 val = std::stoll(s, nullptr, 16);
             return Operand::from_int(val);
         }
 
@@ -227,7 +227,7 @@ private:
         }
 
         // integer
-        return Operand::from_int(std::stoll(s));
+        return Operand::from_int(std::stoull(s));
     }
 
     // get or create a vreg by name
@@ -293,7 +293,7 @@ private:
         // binary ops: add sub mul div mod and or xor shl shr eq ne lt le gt ge
         static const std::unordered_map<std::string, Op> binops = {
             {"add",Op::Add},{"sub",Op::Sub},{"mul",Op::Mul},{"div",Op::Div},
-            {"mod",Op::Mod},{"and",Op::And},{"or",Op::Or},{"xor",Op::Xor},
+            {"rem",Op::Rem},{"and",Op::And},{"or",Op::Or},{"xor",Op::Xor},
             {"shl",Op::Shl},{"shr",Op::Shr},{"eq",Op::Eq},{"ne",Op::Ne},
             {"lt",Op::Lt},{"le",Op::Le},{"gt",Op::Gt},{"ge",Op::Ge},
         };

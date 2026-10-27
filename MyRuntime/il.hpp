@@ -73,14 +73,14 @@ struct Operand {
     enum class Kind : u8 { V_reg, ImmInt, ImmFloat, Empty } kind;
     union {
         V_reg    reg;
-        i64    imm_int;
+        u64    imm_int;
         f64    imm_float;
     };
 
     static Operand from_reg(V_reg r) { Operand o; o.kind = Kind::V_reg;      o.reg = r;   return o; }
-    static Operand from_int(i64 v) { Operand o; o.kind = Kind::ImmInt;   o.imm_int = v;   return o; }
+    static Operand from_int(u64 v) { Operand o; o.kind = Kind::ImmInt;   o.imm_int = v;   return o; }
     static Operand from_float(f64 v) { Operand o; o.kind = Kind::ImmFloat; o.imm_float = v;   return o; }
-
+    
     bool is_reg()   const { return kind == Kind::V_reg; }
     bool is_imm()   const { return kind != Kind::V_reg; }
 };
@@ -89,7 +89,7 @@ struct Operand {
 
 enum class Op : u8 {
     // arithmetic
-    Add, Sub, Mul, Div, Mod, Neg,
+    Add, Sub, Mul, Div, Rem, Neg,
     And, Or, Xor, Shl, Shr, Not,
     // comparison
     Eq, Ne, Lt, Le, Gt, Ge,
@@ -175,6 +175,7 @@ struct Param {
 struct JitCode {
     void* ptr = nullptr;
     size_t size = 0;
+    std::vector<u64> instr_starts;
 };
 struct ILFunction {
     u32                      id;
@@ -185,14 +186,19 @@ struct ILFunction {
     std::vector<BasicBlock>  blocks;    // blocks[0] = entry
     u32                      reg_count = 0; // bump this to allocate a new vreg
 
-    // jit metadata (ignored until you build the jit)
-    u32   call_count = 0;
+    // profiling
+    alignas(8) volatile u64 call_count = 0;
+
+
+    //code
     void* jit_code = nullptr;
+    std::vector<u64> instr_starts;
     std::size_t code_size = 0;
 
     void assign_jit_code(JitCode jc) {
         jit_code = jc.ptr;
         code_size = jc.size;
+        instr_starts = std::move(jc.instr_starts);
     }
 
     // allocate a new virtual register

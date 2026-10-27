@@ -1,4 +1,4 @@
-﻿# IL Documentation - prototype V1
+﻿# IL Documentation
 
 ## Types
 #### Values

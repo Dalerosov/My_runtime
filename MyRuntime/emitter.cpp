@@ -7,6 +7,7 @@
 
 JitCode Emitter::commit() {
     size_t size = buf_.size();
+    std::vector<u64> is = instr_starts;
 
     // allocate RW first — never RWX, some AV software kills RWX pages
     void* mem = VirtualAlloc(nullptr, size,
@@ -19,8 +20,9 @@ JitCode Emitter::commit() {
     // flip to RX
     DWORD old;
     VirtualProtect(mem, size, PAGE_EXECUTE_READ, &old);
-
-    return { mem, buf_.size() };
+    //std::cout << hex_dump() << "\n\n";
+    flush_();
+    return { mem, size, is };
 }
 
 void Emitter::free_code(void* mem, size_t size) {
@@ -31,29 +33,46 @@ void Emitter::free_code(void* mem, size_t size) {
 
 void Emitter::emit_mov_imm_reg(Reg dst, uint64_t value)
 {
-    uint8_t rex = 0x48; // REX.W
+    const int     id = regId(dst);
+    const bool    ext = id >= 8;      // r8..r15 -> REX.B
+    const uint8_t low = id & 7;
 
-    //if (needsREX(dst))
-    //    rex |= 0x01;    // REX.B
-
-    if (needsREX(dst)) { emit(rex); };
-    emit(0xB8 + (regId(dst) & 7));
-    auto size = regInfo(dst).size;
-    switch (size) {
+    switch (regInfo(dst).size) {
     case RegSize::Byte:
-        emit(value);
+        if (ext || (id >= 4 && id < 8))   // r8b+ or spl/bpl/sil/dil
+            emit(0x40 | ext);
+        emit(0xB0 + low);
+        emit(uint8_t(value));
         return;
     case RegSize::Word:
+        emit(0x66);
+        if (ext) emit(0x41);
+        emit(0xB8 + low);
         emitImm16(value);
         return;
     case RegSize::DWord:
+        if (ext) emit(0x41);
+        emit(0xB8 + low);
         emitImm32(value);
         return;
+    case RegSize::QWord:
+        break;
     }
-    emitImm64(value);
+
+    if (int64_t(value) == int32_t(value)) { // mov r/m64, simm32
+        emit(0x48 | ext);
+        emit(0xC7);
+        emit(0xC0 | low);
+        emitImm32(value);
+    }
+    else {                                       // movabs
+        emit(0x48 | ext);
+        emit(0xB8 + low);
+        emitImm64(value);
+    }
 }
 void Emitter::push_r(Reg src) {
-    if (needsREX(src)) emit(0x41);       // REX.B for Byte–R15
+    if (isExt(src)) emit(0x41);       // REX.B for Byte–R15
     emit(0x50 | regId(src));             // 0x50+rd
 }
 
@@ -79,92 +98,94 @@ void Emitter::push_i(i64 imm) {
 }
 
 void Emitter::pop_r(Reg dst) {
-    if (needsREX(dst)) emit(0x41);  // REX.B for Byte–R15
+    if (isExt(dst)) emit(0x41);  // REX.B for Byte–R15
     emit(0x58 | regId(dst));        // 0x58+rd
 }
 
 void Emitter::mov_rr(Reg dst, Reg src) {
     u8 rex = 0x48;                    // REX.W
-    if (needsREX(src)) rex |= 0x01;        // REX.B — src in r/m field
-    if (needsREX(dst)) rex |= 0x04;        // REX.R — dst in reg field
+    if (isExt(src)) rex |= 0x01;        // REX.B — src in r/m field
+    if (isExt(dst)) rex |= 0x04;        // REX.R — dst in reg field
     emit(rex);
     emit(0x89);                            // MOV r/m64, QWord
     emit(0xC0 | (regId(src) << 3) | regId(dst));  // ModRM
 }
 
 void Emitter::add_ri(Reg dst, i64 imm) {
-    u8 rex = 0x48;
-    if (needsREX(dst)) rex |= 0x01;
+    const u8 rex = 0x48 | (isExt(dst) ? 0x01 : 0x00);
+    const u8 rm = regId(dst) & 7;
 
     if (imm >= -128 && imm <= 127) {
-        emit(rex);
-        emit(0x83);
-        emit(0xC0 | regId(dst));
+        emit(rex); emit(0x83); emit(0xC0 | rm);          // /0 = ADD
         emit(static_cast<u8>(imm));
     }
     else if (imm >= INT32_MIN && imm <= INT32_MAX) {
-        emit(rex);
-        emit(0x81);
-        emit(0xC0 | regId(dst));
+        emit(rex); emit(0x81); emit(0xC0 | rm);
         emitImm32(static_cast<i32>(imm));
     }
     else {
-        // no add QWord, imm64 encoding — use scratch register
-        // save rax if dst is not rax
-        if (dst != Reg::RAX) {
-            push_r(Reg::RAX);
-        }
-        // mov rax, imm64
-        emit(0x48);
-        emit(0xB8);
+        assert(dst != Reg::RSP);
+        const Reg s = (dst == Reg::RAX) ? Reg::RCX : Reg::RAX;
+        push_r(s);
+        emit(0x48 | (isExt(s) ? 0x01 : 0x00));            // movabs s, imm64
+        emit(0xB8 | (regId(s) & 7));
         emitImm64(imm);
-        // add dst, rax
-        add_rr(dst, Reg::RAX);
-        if (dst != Reg::RAX) {
-            pop_r(Reg::RAX);
-        }
+        add_rr(dst, s);
+        pop_r(s);
     }
 }
 
-void Emitter::mov_rm(Reg dst, int32_t rbp_offset) {
-    uint8_t rex = 0x48;
-    //if (needsREX(dst)) rex |= 0x04; // REX.R extends reg (dst)
-    if (needsREX(dst)) { emit(rex); }
-    emit(0x8B);                                          // MOV r64, r/m64
-    emit(0x80 | (regId(dst) << 3) | 0x05);              // ModRM: mod=10, reg=dst, r/m=RBP
-    emitImm32(rbp_offset);
+void Emitter::mov_rm(Reg dst, int32_t rbp_offset) {      // mov dst, [rbp+disp32]
+    emit(0x48 | (isExt(dst) ? 0x04 : 0x00));             // REX.W + R
+    emit(0x8B);
+    emit(0x80 | ((regId(dst) & 7) << 3) | 0x05);         // mod=10, reg=dst, rm=rbp
+    emitImm32(static_cast<uint32_t>(rbp_offset));
 }
 
-void Emitter::mov_mr(int32_t rbp_offset, Reg src) {
-    uint8_t rex = 0x48;
-    //if (needsREX(src)) rex |= 0x04; // REX.R extends reg (src)
-    if (needsREX(src)) { emit(rex); }
-    emit(0x89);                          // MOV r/m64, r64
-    emit(0x85 | (regId(src) << 3));      // ModRM: mod=10 reg=src r/m=101 (RBP+disp32)
-    emitImm32(rbp_offset);
+void Emitter::mov_mr(int32_t rbp_offset, Reg src) {      // mov [rbp+disp32], src
+    emit(0x48 | (isExt(src) ? 0x04 : 0x00));
+    emit(0x89);
+    emit(0x80 | ((regId(src) & 7) << 3) | 0x05);
+    emitImm32(static_cast<uint32_t>(rbp_offset));
 }
 
-void Emitter::add_rr(Reg dst, Reg src) {
-    u8 rex = 0x48;                // REX.W
-    //if (needsREX(src)) rex |= 0x01;   // REX.B
-    //if (needsREX(dst)) rex |= 0x04;   // REX.R
-    if (needsREX(src)) { emit(rex); }
-    emit(0x01);                        // ADD r/m64, QWord
-    emit(0xC0 | (regId(src) << 3) | regId(dst));  // ModRM
+
+void Emitter::emit_f7(u8 ext, Reg rm) {
+    emit(0x48 | (isExt(rm) ? 0x01 : 0x00));   // only B, reg field isn't a register
+    emit(0xF7);
+    emit(0xC0 | (ext << 3) | (regId(rm) & 7));
 }
 
-void Emitter::sub_rr(Reg dst, Reg src) {
-    uint8_t rex = 0x48;
-    //if (needsREX(src)) rex |= 0x01;   // REX.B
-   //if (needsREX(dst)) rex |= 0x04;   // REX.R
-    if (needsREX(src)) { emit(rex); }
-    emit(0x29);                                        // SUB r/m64, QWord
-    emit(0xC0 | (regId(src) << 3) | regId(dst));
+void Emitter::mul_rr(Reg dst, Reg src) {
+    uint8_t rex = 0x48; // REX.W
+
+    if (isExt(dst)) rex |= 0x04; // REX.R: ModRM reg field
+    if (isExt(src)) rex |= 0x01; // REX.B: ModRM r/m field
+
+    emit(rex);
+    emit(0x0F);
+    emit(0xAF);
+    emit(0xC0 | ((regId(dst) & 7) << 3) | (regId(src) & 7));
 }
+void Emitter::div_rr(Reg dst, Reg src) {    // unsigned, dst /= src
+    emit_rr(0x89, Reg::RAX, dst);           // mov rax, dst
+    emit(0x31); emit(0xD2);                 // xor edx, edx
+    emit_f7(6, src);                        // div src
+    emit_rr(0x89, dst, Reg::RAX);           // mov dst, rax
+}
+
+void Emitter::emit_rr(u8 opcode, Reg dst, Reg src) {
+    emit(0x48 | (isExt(src) ? 0x04 : 0x00) | (isExt(dst) ? 0x01 : 0x00));
+    emit(opcode);
+    emit(0xC0 | ((regId(src) & 7) << 3) | (regId(dst) & 7));
+}
+
+void Emitter::add_rr(Reg dst, Reg src) { emit_rr(0x01, dst, src); }
+void Emitter::sub_rr(Reg dst, Reg src) { emit_rr(0x29, dst, src); }
 
 void Emitter::sub_ri(Reg dst, i64 imm) {
     u8 rex = 0x48;
-    if (needsREX(dst)) rex |= 0x01;
+    if (isExt(dst)) rex |= 0x01;
 
     if (imm >= -128 && imm <= 127) {
         emit(rex);
@@ -190,8 +211,8 @@ void Emitter::sub_ri(Reg dst, i64 imm) {
 
 void Emitter::imul_rr(Reg dst, Reg src) {
     u8 rex = 0x48;
-    if (needsREX(src)) rex |= 0x01;
-    if (needsREX(dst)) rex |= 0x04;
+    if (isExt(src)) rex |= 0x01;
+    if (isExt(dst)) rex |= 0x04;
     emit(rex);
     emit(0x0F);
     emit(0xAF);
@@ -200,8 +221,8 @@ void Emitter::imul_rr(Reg dst, Reg src) {
 
 void Emitter::cmp_rr(Reg a, Reg b) {
     u8 rex = 0x48;
-    if (needsREX(b)) rex |= 0x01;
-    if (needsREX(a)) rex |= 0x04;
+    if (isExt(b)) rex |= 0x01;
+    if (isExt(a)) rex |= 0x04;
     emit(rex);
     emit(0x3B);
     emit(0xC0 | (regId(a) << 3) | regId(b));
@@ -229,7 +250,7 @@ void Emitter::je_rel32(i32 offset) {
 }
 
 void Emitter::call_r(Reg r) {
-    if (needsREX(r)) emit(0x41);
+    if (isExt(r)) emit(0x41);
     emit(0xFF);
     emit(0xD0 | regId(r));
 }

@@ -6,6 +6,7 @@
 #include "loader.hpp"
 #include "parser2.hpp"
 #include "compiler.hpp"
+#include "profiler.h"
 #include "il.hpp"
 
 class Runtime {
@@ -13,7 +14,7 @@ class Runtime {
 	std::unique_ptr<Loader> loader;
 	std::unique_ptr<Parser> parser;
 	std::unique_ptr<Compiler> compiler;
-	//Optimiser optimiser;
+    std::unique_ptr<Profiler> profiler;
 	std::shared_ptr<Emitter> emitter;
 
 	std::string file_location{ "D:/mylang/test.sil" };
@@ -23,6 +24,7 @@ public:
 		loader = std::make_unique<Loader>(file_location);
 		parser = std::make_unique<Parser>();
         emitter = std::make_shared<Emitter>();
+        
 	}
 
 	void Run() {
@@ -39,22 +41,114 @@ public:
 
         for each (auto fun in il_representation->functions)
         {
-            //print_function(fun, il_representation);
+            print_function(fun, il_representation);
         }
         std::cout << "\n\n";
+
+        // START PROFILER 
+
+        profiler = std::make_unique<Profiler>(il_representation);
+        profiler->start();
+
+        auto exec_start = std::chrono::high_resolution_clock::now();
         //begin cmp and exec
         if (!lazy) {
             Eager_comp(il_representation);
+        }
+        
+        else {
 
 
         }
-
-		
+        auto exec_end = std::chrono::high_resolution_clock::now();
+        profiler->end();
+        std::cout << "Ran for: " << (std::chrono::duration<double, std::milli>) (exec_end - exec_start);
 	}
 
     void Eager_comp(const std::shared_ptr<ILProgram> il_representation) {
         compiler = std::make_unique<Compiler>(il_representation, emitter);
-        compiler->compile();
+
+        // Compile whole program
+        compiler->compile_eager();
+
+        for (auto& fu : il_representation->functions) {
+            std::cout << hex_dump_raw(fu) << "\n\n";
+        }
+        std::cout << "\n\n\n";
+        for (auto& fu : il_representation->functions) {
+            std::cout << hex_dump(fu) << "\n\n";
+        }
+
+        // EXECUTE CODE
+        ILFunction* main_fn = il_representation->find("main");
+        if (!main_fn || !main_fn->jit_code) {
+            std::cerr << "main not compiled\n";
+            return;
+        }
+
+        using MainFn = u64(*)();
+        u64 result = reinterpret_cast<MainFn>(main_fn->jit_code)();
+        std::cout << "main returned: " << result << "\n";
+
+        std::cout << "\n\n\n";
+        for (auto& fu : il_representation->functions) {
+            std::cout << fu.name << " called: " << fu.call_count << " times\n\n";
+        }
+    }
+
+    std::string hex_dump(const ILFunction& fu) const {
+        static const char* hex = "0123456789ABCDEF";
+        std::string out;
+        if (!fu.jit_code || fu.code_size == 0) return out;
+
+        const auto* p = static_cast<const unsigned char*>(fu.jit_code);
+        const auto& s = fu.instr_starts;
+
+        auto line = [&](std::size_t begin, std::size_t end) {
+            if (end > fu.code_size) end = fu.code_size;   // paranoia
+            out += std::format("{:04X}: ", begin);
+            for (std::size_t i = begin; i < end; ++i) {
+                out += hex[p[i] >> 4];
+                out += hex[p[i] & 0xF];
+                out += ' ';
+            }
+            out += '\n';
+            };
+
+        if (s.empty()) {                       // nothing recorded, dump it all as one line
+            line(0, fu.code_size);
+            return out;
+        }
+
+        if (s[0] > 0) line(0, s[0]);           // prologue (bytes before the first mark)
+
+        for (std::size_t i = 0; i < s.size(); ++i) {
+            std::size_t end = (i + 1 < s.size()) ? s[i + 1] : fu.code_size;
+            line(s[i], end);
+        }
+        return out;
+    }
+
+    std::string hex_dump_raw(const ILFunction& fu) const {
+        static const char* hex = "0123456789ABCDEF";
+        std::string out;
+        if (!fu.jit_code || fu.code_size == 0) return out;
+
+        const auto* p = static_cast<const unsigned char*>(fu.jit_code);
+
+
+        out.reserve(fu.code_size * 3);
+        for (std::size_t i = 0; i < fu.code_size; i++) {
+            out += hex[p[i] >> 4];
+            out += hex[p[i] & 0xF];
+            out += ' ';
+        }
+        if (!out.empty()) out.pop_back();
+        return out;
+    }
+
+    void Lazy_comp(const std::shared_ptr<ILProgram> il_representation) {
+        compiler = std::make_unique<Compiler>(il_representation, emitter);
     }
 
 	// temporary: print an operand for debugging
@@ -67,18 +161,7 @@ public:
 			std::cout << o.imm_float;
 	}
 
-    std::string hex_dump(std::vector<u8> buf_) const {
-        static const char* hex = "0123456789ABCDEF";
-        std::string out;
-        out.reserve(buf_.size() * 3);
-        for (uint8_t b : buf_) {
-            out += hex[b >> 4];
-            out += hex[b & 0xF];
-            out += ' ';
-        }
-        if (!out.empty()) out.pop_back();
-        return out;
-    }
+    
 
 	static void print_function(const ILFunction& fn, const std::shared_ptr<ILProgram> il_representation) {
         std::cout << "\n";
@@ -131,7 +214,7 @@ public:
         case Op::Sub:        return "sub";
         case Op::Mul:        return "mul";
         case Op::Div:        return "div";
-        case Op::Mod:        return "mod";
+        case Op::Rem:        return "rems";
         case Op::Neg:        return "neg";
         case Op::And:        return "and";
         case Op::Or:         return "or";

@@ -40,6 +40,8 @@ class Emitter {
 public:
     void rex_w(bool w, bool r, bool x, bool b);
     void emit_mov_imm_reg(Reg dst, uint64_t value);
+    void emit_f7(u8 ext, Reg rm);
+    void emit_rr(u8 opcode, Reg dst, Reg src);
     void push_r(Reg src);
     void push_i(i64);
     void pop_r(Reg dst);
@@ -51,12 +53,16 @@ public:
     void add_ri(Reg dst, i64 imm);
     void sub_rr(Reg dst, Reg src);
     void sub_ri(Reg dst, i64 imm);
+    void mul_rr(Reg dst, Reg src);
+    void div_rr(Reg dst, Reg src);
     void imul_rr(Reg dst, Reg src);
     void cmp_rr(Reg a, Reg b);
     void jmp_rel32(i32 offset);
     void je_rel32(i32 offset);   // patch these after layout
     void call_r(Reg r);
     void ret();
+
+    void mark_instr() { instr_starts.push_back(current_offset()); }
 
     // for patching forward branches:
     u32  emit_jcc_placeholder();
@@ -69,20 +75,26 @@ public:
     // The SUB immediate is patched when emit_epilogue() (or patch_prologue())
     // is called, once the total frame size is known.
     // -----------------------------------------------------------------------
-    void emit_prologue() {
+    void emit_prologue(const volatile void* counter) {
+        mark_instr();
         if (prologue_emitted_)
             throw std::logic_error("emit_prologue() already called");
 
         // push rbp                      ; 55
         emit(0x55);
 
+        mark_instr();
         // mov rbp, rsp                  ; 48 89 E5
         emit(0x48); emit(0x89); emit(0xE5);
+
+        mark_instr();
 
         // sub rsp, imm32  (placeholder) ; 48 81 EC [00 00 00 00]
         sub_rsp_offset_ = static_cast<int32_t>(buf_.size());
         emit(0x48); emit(0x81); emit(0xEC);
         emitImm32(0x00000000);   // patched later
+
+        emit_count_call(counter);
 
         prologue_emitted_ = true;
     }
@@ -92,8 +104,8 @@ public:
         // patch any forward jumps that were waiting for this label
         for (auto it = patches.begin(); it != patches.end(); ) {
             if (it->second == id) {
-                u32 rel = current_offset() - (it->first + 0);
-                std::cout << "emitted label to instr: " << rel << "\n";
+                u32 rel = current_offset() - (it->first + 4);
+                //std::cout << "emitted label to instr: " << rel << "\n";
                 patch32(it->first, rel);
                 it = patches.erase(it);
             }
@@ -107,7 +119,7 @@ public:
         if (it != labels.end()) {
             // backward jump — target already known
             i32 rel = it->second - ((i32)current_offset() + 4);
-            std::cout << "emitted jmp to instr: " << rel << "\n";
+            //std::cout << "emitted jmp to instr: " << rel << "\n";
             emitImm32(rel);
         }
         else {
@@ -119,27 +131,65 @@ public:
     void Emitter::emit_test_reg(Reg reg) {
         uint8_t rex = 0x48;
         //if (needsREX(reg)) rex |= 0x01 | 0x04; // REX.B and REX.R
-        if (needsREX(reg)) {
+        if (isExt(reg)) {
             emit(rex);
         }
         emit(0x85);
         emit(0xC0 | (regId(reg) << 3) | regId(reg)); // ModRM: mod=11, reg=reg, r/m=reg
     }
 
-    void Emitter::emit_jz(const u32 id) {
+    enum class Cond : u8 {
+        O = 0x0, NO = 0x1,
+        B = 0x2, AE = 0x3,   // unsigned <, >=   (carry)
+        E = 0x4, NE = 0x5,   // ==, !=           (zero)
+        BE = 0x6, A = 0x7,   // unsigned <=, >
+        S = 0x8, NS = 0x9,   // sign
+        P = 0xA, NP = 0xB,   // parity
+        L = 0xC, GE = 0xD,   // signed <, >=
+        LE = 0xE, G = 0xF,   // signed <=, >
+    };
+
+    void Emitter::emit_jcc(Cond cc, const u32 id) {
         emit(0x0F);
-        emit(0x84);
+        emit(0x80 | static_cast<u8>(cc));
         auto it = labels.find(id);
         if (it != labels.end()) {
+            // backward jump, target known
             i32 rel = it->second - ((i32)current_offset() + 4);
-            std::cout << "emitted jz to instr: " << rel << "\n";
+            //std::cout << "emitted jmp to instr: " << rel << "\n";
             emitImm32(rel);
         }
         else {
-            patches.push_back({ (i32)current_offset(), id });
-            emitImm32(0x00000000);
+            // forward jump, patched in emit_label
+            patches.push_back({ current_offset(), id });
+            emitImm32(0xCCCCCCCC);   // jumps into the weeds, fails fast
         }
     }
+    void setcc(Cond cc) { emit({ 0x0F, (u8)(0x90 | (u8)cc), 0xC0 }); } // setcc al
+    void movzx_eax_al() { emit({ 0x0F, 0xB6, 0xC0 }); }                // movzx eax, al
+
+    void movzx_eax_mem(i32 rbp_offset, u32 size) {      // size 1 or 2
+        emit(0x0F); emit(size == 1 ? 0xB6 : 0xB7);      // movzx eax, byte/word ptr [rbp+disp32]
+        emit(0x85);
+        emitImm32(rbp_offset);
+    }
+
+    void Emitter::emit_jz(u32 id) { emit_jcc(Cond::E, id); }
+    void Emitter::emit_jnz(u32 id) { emit_jcc(Cond::NE, id); }
+    void Emitter::emit_js(u32 id) { emit_jcc(Cond::S, id); }
+    void Emitter::emit_jns(u32 id) { emit_jcc(Cond::NS, id); }
+
+    // signed
+    void Emitter::emit_jl(u32 id) { emit_jcc(Cond::L, id); }
+    void Emitter::emit_jle(u32 id) { emit_jcc(Cond::LE, id); }
+    void Emitter::emit_jg(u32 id) { emit_jcc(Cond::G, id); }
+    void Emitter::emit_jge(u32 id) { emit_jcc(Cond::GE, id); }
+
+    // unsigned
+    void Emitter::emit_jb(u32 id) { emit_jcc(Cond::B, id); }
+    void Emitter::emit_jbe(u32 id) { emit_jcc(Cond::BE, id); }
+    void Emitter::emit_ja(u32 id) { emit_jcc(Cond::A, id); }
+    void Emitter::emit_jae(u32 id) { emit_jcc(Cond::AE, id); }
 
     // -----------------------------------------------------------------------
     // Declare a named local variable.
@@ -151,7 +201,9 @@ public:
         if (epilogue_emitted_)
             throw std::logic_error("cannot declare vars after emit_epilogue()");
         if (vars_.count(v_reg))
+        {
             throw std::invalid_argument("duplicate variable name: " + v_reg);
+        }
 
 
         // Align the next offset to the variable's natural alignment
@@ -176,34 +228,45 @@ public:
     // -----------------------------------------------------------------------
     // Emit  MOV [rbp + offset], imm   for a variable (32-bit immediate max).
     // -----------------------------------------------------------------------
-    void emit_store_imm_stack(const u32 v_reg, int32_t value) {
+    void emit_store_imm_stack(const u32 v_reg, int64_t value) {
         VarInfo v = var(v_reg);
+        const int32_t disp = v.rbp_offset;
+
+        auto store_dword = [&](int32_t d, uint32_t imm) {
+            emit(0xC7); emit(0x85);
+            emitImm32(static_cast<uint32_t>(d));
+            emitImm32(imm);
+            };
+
         switch (v.size) {
         case 1:
-            // C6 85 [disp32] [imm8]
             emit(0xC6); emit(0x85);
-            emitImm32(static_cast<uint32_t>(v.rbp_offset));
+            emitImm32(static_cast<uint32_t>(disp));
             emit(static_cast<uint8_t>(value));
             break;
         case 2:
-            // 66 C7 85 [disp32] [imm16]
             emit(0x66); emit(0xC7); emit(0x85);
-            emitImm32(static_cast<uint32_t>(v.rbp_offset));
+            emitImm32(static_cast<uint32_t>(disp));
             emitImm16(static_cast<uint16_t>(value));
             break;
         case 4:
-            // C7 85 [disp32] [imm32]
-            emit(0xC7); emit(0x85);
-            emitImm32(static_cast<uint32_t>(v.rbp_offset));
-            emitImm32(static_cast<uint32_t>(value));
+            store_dword(disp, static_cast<uint32_t>(value));
             break;
         case 8:
-            // Move imm32 sign-extended into qword:
-            // 48 C7 85 [disp32] [imm32]
-            emit(0x48); emit(0xC7); emit(0x85);
-            emitImm32(static_cast<uint32_t>(v.rbp_offset));
-            emitImm32(static_cast<uint32_t>(value));
+            if (value >= INT32_MIN && value <= INT32_MAX) {
+                // 48 C7 85 [disp32] [imm32], sign-extended by the CPU
+                emit(0x48); emit(0xC7); emit(0x85);
+                emitImm32(static_cast<uint32_t>(disp));
+                emitImm32(static_cast<uint32_t>(value));
+            }
+            else {
+                // no store-imm64 encoding exists; split into two dword stores
+                store_dword(disp, static_cast<uint32_t>(value));
+                store_dword(disp + 4, static_cast<uint32_t>(static_cast<uint64_t>(value) >> 32));
+            }
             break;
+        default:
+            assert(!"unsupported var size");
         }
     }
 
@@ -257,12 +320,14 @@ public:
 
         patch_prologue();
         
+        mark_instr();
         // leave   ; C9
         emit(0xC9);
+        mark_instr();
         // ret     ; C3
         emit(0xC3);
-
-        epilogue_emitted_ = true;
+        //epilogue_emitted_ = true;
+        //flush_();
     }
 
 
@@ -288,6 +353,14 @@ public:
     inline void emitImm64(i64 imm) {
         for (int i = 0; i < 8; i++)
             emit((imm >> (i * 8)) & 0xFF);
+    }
+
+    // PROFILING
+
+    void Emitter::emit_count_call(const volatile void* counter) {
+        emit(0x49); emit(0xBB);
+        emitImm64((u64)counter);
+        emit(0x49); emit(0xFF); emit(0x03);      // inc qword [r11]
     }
 
     // -----------------------------------------------------------------------
@@ -397,6 +470,20 @@ private:
         p[3] = (frame_size_ >> 24) & 0xFF;
     }
 
+    void flush_() {
+        buf_.clear();
+        vars_.clear();
+        current_offset_ = 0;
+        frame_size_ = 0;
+        sub_rsp_offset_ = 0;
+        prologue_emitted_ = false;
+        epilogue_emitted_ = false;
+        labels.clear();
+        patches.clear();
+        instr_starts.clear();
+    }
+
+    // META DATA 
     std::vector<u8> buf_;
     std::unordered_map<u32, VarInfo> vars_;
     int32_t  current_offset_ = 0;   // grows negative as vars are declared
@@ -406,4 +493,6 @@ private:
     bool     epilogue_emitted_ = false;
     std::unordered_map<u32, u32> labels;        // defined labels
     std::vector<std::pair<u32, u32>> patches;   // (patch_offset, label_name)
+
+    std::vector<u64> instr_starts;
 };

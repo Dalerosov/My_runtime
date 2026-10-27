@@ -122,5 +122,5 @@ inline const RegInfo& regInfo(Reg r) {
 }
 
 inline uint8_t regId(Reg r) { return regInfo(r).id & 0b111; }
-inline bool needsREX(Reg r) { return regInfo(r).ext; }
+inline bool isExt(Reg r) { return regInfo(r).ext; }
 inline RegSize regSize(Reg r) { return regInfo(r).size; }
