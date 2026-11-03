@@ -1,21 +1,37 @@
-fn fib($n : i32) -> i32
-    $a : i32 = 0
-    $b : i32 = 1
-    $i : i32 = 0
-    
-    loop:
-    $done : i32 = sub $i, $n
-    jz $done, exit
-    $tmp : i32 = add $a, $b
-    $a : i32 = $b
-    $b : i32 = $tmp
-    $i : i32 = add $i, 1
-    jmp loop
-    
-    exit:
-    ret $a
+fn is_prime($n : u64) -> u64
+    $small : u64 = lt $n, 2
+    jnz $small, no
 
-fn main()
-    $n : i32 = 10
-    $res : i32 = call fib, $n
-    ret
+    $d : u64 = 2
+    loop:
+    $sq : u64 = mul $d, $d
+    $over : u64 = gt $sq, $n
+    jnz $over, yes
+    $r : u64 = rem $n, $d
+    jz $r, no
+    $d : u64 = add $d, 1
+    jmp loop
+
+    yes:
+    $one : u64 = 1
+    ret $one
+    no:
+    $zero : u64 = 0
+    ret $zero
+
+fn main() -> u64
+    $n : u64 = 2
+    $count : u64 = 0
+
+    outer:
+    $c : u64 = lt $n, 10000000
+    jz $c, done
+    $p : u64 = call is_prime, $n
+    jz $p, skip
+    $count : u64 = add $count, 1
+    skip:
+    $n : u64 = add $n, 1
+    jmp outer
+
+    done:
+    ret $count
