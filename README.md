@@ -1,34 +1,102 @@
 # MyRuntime
 
-A JIT compiler and runtime system written in C++, targeting x86-64 on Windows.
+A JIT compiler and runtime written in C++, targeting x86-64 on Windows.
 
-> **Status: very early work-in-progress (~1% complete).** Jump patching is not fully implemented, and the JIT does not yet execute generated code end-to-end. This is a personal learning project exploring runtime/JIT internals — not something you can run programs with yet.
+> **Status: early but working.** IL programs are parsed, compiled to native x86-64 at runtime, and executed. The language is close to Turing complete; arrays and pointers are the main missing pieces. This is a personal learning project exploring runtime and JIT internals.
 
 ## What this is
 
-MyRuntime is an experiment in building a JIT compiler and runtime from scratch: taking a simple intermediate representation, generating x86-64 machine code for it directly, and (eventually) executing that code. It's inspired by how production runtimes like the JVM and .NET CLR work under the hood, scaled down to something one person can build and understand end to end.
+MyRuntime is an experiment in building a JIT compiler and runtime from scratch: take a simple intermediate representation, generate x86-64 machine code for it directly (no LLVM, no assembler library), and execute it. It's inspired by how production runtimes like the JVM and .NET CLR work under the hood, scaled down to something one person can build and understand end to end.
 
-## What's implemented so far
+## How it works
 
-- Executable memory allocation for JIT-compiled code (`VirtualAlloc`, RW → RX transition)
-- x86-64 instruction encoding basics: REX prefixes, ModRM bytes, jump opcodes
-- A simple IL / operand representation, including type punning for operand storage
-- Register allocation with basic spill handling
-- Groundwork for the Windows x64 calling convention (prologue/epilogue generation)
-- Label/jump patching (forward and backward) — in progress, not yet reliable
+```
+ IL source file ──► parser ──► IL in memory ──► x86-64 emitter ──► executable memory ──► run
+                                              
+```
 
-## What's not working yet
+- **IL**: a three-address language with named, typed variables (`i32`, `u64`). Programs are loaded from a file at runtime. Operands are stored using type punning.
+- **Emitter**: encodes x86-64 directly: REX prefixes, ModRM bytes, jump opcodes, stack frames.
+- **Calling convention**: Windows x64 ABI prologue/epilogue generation and calls.
+- **Register allocation**: basic allocation with spill handling, plus a shadow value stack that tracks where values live so the emitter avoids redundant stack-to-register round trips.
+- **Jumps and labels**: forward and backward jumps are resolved with a patch list, fixed up when the label is emitted.
+- **Executable memory**: code is written to `VirtualAlloc`'d pages as read/write, then flipped to read/execute before running (never RWX).
+- **Instrumentation**: each function's prologue increments a call counter, which is the groundwork for tiered compilation.
+- **Hexdump**: the emitted machine code can be dumped for inspection.
 
-- Jump patching has known issues and isn't complete
-- There is no working end-to-end execution path — JIT-compiled code does not run yet
-- Instruction coverage is minimal
-- No optimization passes
-## Why
+## IL example
 
-Built to understand JIT and runtime internals from the ground up — instruction encoding, calling conventions, code generation, and the design tradeoffs that runtimes like the JVM and CLR make.
+```
+fn is_prime($n : u64) -> u64
+    $small : u64 = lt $n, 2
+    jnz $small, no
 
-## Building
+    $d : u64 = 2
+    loop:
+    $sq : u64 = mul $d, $d
+    $over : u64 = gt $sq, $n
+    jnz $over, yes
+    $r : u64 = rem $n, $d
+    jz $r, no
+    $d : u64 = add $d, 1
+    jmp loop
 
-The code can be browsed and built, but there's currently no working demo to run — this section will be filled in once there's an end-to-end path from IL to execution.
+    yes:
+    $one : u64 = 1
+    ret $one
+    no:
+    $zero : u64 = 0
+    ret $zero
 
-As of now you can at least get a hexdump, the program exaecutes from `D:\mylang.test.sil`; you can just change the target in code though
+fn main() -> u64
+    $n : u64 = 2
+    $count : u64 = 0
+
+    outer:
+    $c : u64 = lt $n, 10000000
+    jz $c, done
+    $p : u64 = call is_prime, $n
+    jz $p, skip
+    $count : u64 = add $count, 1
+    skip:
+    $n : u64 = add $n, 1
+    jmp outer
+
+    done:
+    ret $count
+```
+
+## Status
+
+| Area | State |
+|---|---|
+| IL parser (loads from file at runtime) | Working |
+| x86-64 emission, Windows x64 ABI | Working |
+| Arithmetic, calls, returns | Working |
+| Conditional/unconditional jumps, labels (forward and backward) | Working |
+| Register allocation with spill handling | Working, basic |
+| Per-function call counters | Working |
+| Hexdump of emitted code | Working |
+| Arrays | Not yet |
+| Pointers | Not yet |
+| Instruction coverage | Minimal |
+| Optimization passes | None yet |
+| Tiered compilation | Planned; call counters are the first step |
+
+## Design decisions
+
+- **Direct machine code emission.** More work than using an assembler, but the encoding is the interesting part.
+
+## Running
+
+The program currently loads its IL from `D:\mylang.test.sil`. The path is hardcoded; change it in the source to point at your own file.
+
+
+## Roadmap
+
+- [ ] Pointers
+- [ ] Heap arrays
+- [ ] Tiered compilation driven by the call counters
+- [ ] Broader instruction coverage
+- [ ] Optimization passes
+- [ ] Far future: create a language which will be compiled into the IL
